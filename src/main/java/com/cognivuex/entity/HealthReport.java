@@ -1,8 +1,9 @@
 package com.cognivuex.entity;
 
-import com.cognivuex.entity.RiskLevel;
 import jakarta.persistence.*;
 import lombok.*;
+
+import java.time.LocalDateTime;
 
 @Entity
 @Table(name = "health_reports")
@@ -22,26 +23,106 @@ public class HealthReport {
     )
     private Long id;
 
+    // =========================
+    // USER RELATION
+    // =========================
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user_id")
+    private User user;
+
+    // =========================
+    // PATIENT DETAILS
+    // =========================
+
     private String patientName;
+
     private Integer age;
+
+    private String gender;
+
+    // =========================
+    // MEDICAL VALUES
+    // =========================
+
     private Integer sugar;
+
     private Integer glucose;
+
     private Integer cholesterol;
+
     private Integer systolicBP;
+
     private Integer diastolicBP;
+
     private Double bmi;
+
     private Integer heartRate;
+
     private Double hba1c;
+
+    // =========================
+    // AI PREDICTION
+    // =========================
+
     private Integer riskScore;
 
     @Enumerated(EnumType.STRING)
     private RiskLevel riskLevel;
 
-    @Column(length = 2000)
-    private String suggestions;
+    // =========================
+    // AI HEALTH INSIGHTS
+    // =========================
+
+    private Integer wellnessScore;
+
+    private Double biologicalAge;
+
+    private Integer longevityIndex;
+
+    private Integer sleepScore;
+
+    private Integer heartScore;
+
+    private Integer stressScore;
+
+    private Integer recoveryScore;
+
+    // =========================
+    // AI ANALYSIS
+    // =========================
 
     @Column(length = 5000)
+    private String diseaseRisks;
+
+    @Column(length = 5000)
+    private String suggestions;
+
+    // =========================
+    // REPORT DATA
+    // =========================
+
+    @Column(length = 20000)
     private String extractedText;
 
     private String uploadedFileName;
+
+    // =========================
+    // AUDIT FIELDS
+    // =========================
+
+    private LocalDateTime createdAt;
+
+    private LocalDateTime updatedAt;
+
+    @PrePersist
+    public void onCreate() {
+        createdAt = LocalDateTime.now();
+        updatedAt = LocalDateTime.now();
+    }
+
+    @PreUpdate
+    public void onUpdate() {
+        updatedAt = LocalDateTime.now();
+    }
 }

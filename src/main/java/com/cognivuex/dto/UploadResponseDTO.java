@@ -1,5 +1,6 @@
 package com.cognivuex.dto;
 
+import com.cognivuex.entity.HealthReport;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -7,13 +8,11 @@ import lombok.NoArgsConstructor;
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
-public class PredictionResponseDTO {
+public class UploadResponseDTO {
 
-    private Integer riskScore;
+    private HealthReport report;
 
-    private String riskLevel;
+    private PredictionResponseDTO prediction;
 
-    private String aiRecommendation;
-
-    private Long reportId;
 }
+

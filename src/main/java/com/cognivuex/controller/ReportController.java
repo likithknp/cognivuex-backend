@@ -2,6 +2,9 @@ package com.cognivuex.controller;
 
 import com.cognivuex.entity.HealthReport;
 import com.cognivuex.repository.HealthReportRepository;
+import com.cognivuex.service.MedicalAIService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -12,6 +15,9 @@ import java.util.List;
 public class ReportController {
 
     private final HealthReportRepository repository;
+
+    @Autowired
+    private MedicalAIService medicalAIService;
 
     public ReportController(
             HealthReportRepository repository
@@ -32,5 +38,19 @@ public class ReportController {
     public List<HealthReport> getReports() {
 
         return repository.findAll();
+    }
+
+    @GetMapping("/latest")
+    public ResponseEntity<HealthReport> getLatestReport() {
+
+        return repository
+                .findTopByOrderByIdDesc()
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    @GetMapping("/test-gemini")
+    public String testGemini() throws Exception {
+        return medicalAIService.analyze("Patient age 45 glucose 110");
     }
 }

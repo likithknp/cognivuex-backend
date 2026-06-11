@@ -29,11 +29,11 @@ public class PredictionServiceImpl implements PredictionService {
             recommendation = "High risk detected. Immediate attention required.";
         }
 
-        return new PredictionResponseDTO(
-                score,
-                level,
-                recommendation
-        );
+        PredictionResponseDTO dto = new PredictionResponseDTO();
+        dto.setRiskScore(score);
+        dto.setRiskLevel(level);
+        dto.setAiRecommendation(recommendation);
+        return dto;
     }
 
     private int calculateScore(String text) {

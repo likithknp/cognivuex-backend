@@ -3,3 +3,5 @@ target/
 *.iml
 *.class
 *.jar
+logs/
+.env
