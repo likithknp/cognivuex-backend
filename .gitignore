@@ -5,3 +5,5 @@ target/
 *.jar
 logs/
 .env
+*.log
+.vscode/
