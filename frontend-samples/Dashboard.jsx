@@ -41,7 +41,7 @@ export default function Dashboard() {
     // Fallback: fetch latest reports from backend
     (async () => {
       try {
-        const res = await axios.get('http://localhost:8090/api/reports');
+        const res = await axios.get('https://cognivuex-backend-1.onrender.com/api/reports');
         // assuming backend returns list and newest comes first (adjust if needed)
         if (Array.isArray(res.data) && res.data.length > 0) {
           setReport(res.data[0]);
