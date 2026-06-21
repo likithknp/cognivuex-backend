@@ -174,7 +174,53 @@ public class FileAnalysisService {
         report.setDiastolicBP(
                 data.path("diastolicBP").asInt()
         );
+        report.setBiologicalAge(
+                data.path("biologicalAge").asDouble()
+        );
 
+        report.setHealthSpanPrediction(
+                data.path("healthSpanPrediction").asInt()
+        );
+
+        report.setTwinAccuracy(
+                data.path("twinAccuracy").asInt()
+        );
+
+        report.setLongevityIndex(
+                data.path("longevityIndex").asInt()
+        );
+
+        report.setCardiovascularScore(
+                data.path("cardiovascularScore").asInt()
+        );
+
+        report.setImmuneScore(
+                data.path("immuneScore").asInt()
+        );
+
+        report.setMetabolicScore(
+                data.path("metabolicScore").asInt()
+        );
+
+        report.setRespiratoryScore(
+                data.path("respiratoryScore").asInt()
+        );
+
+        report.setEndocrineScore(
+                data.path("endocrineScore").asInt()
+        );
+
+        report.setNervousSystemScore(
+                data.path("nervousSystemScore").asInt()
+        );
+
+        report.setDiseaseRisks(
+                data.path("diseaseRisks").asText()
+        );
+
+        report.setSuggestions(
+                data.path("suggestions").asText()
+        );
         try {
             repository.save(report);
         }
@@ -229,7 +275,33 @@ public class FileAnalysisService {
         report.setHba1c(5.6);
         report.setSystolicBP(120);
         report.setDiastolicBP(80);
+        report.setBiologicalAge(38.0);
 
+        report.setHealthSpanPrediction(88);
+
+        report.setTwinAccuracy(92);
+
+        report.setLongevityIndex(90);
+
+        report.setCardiovascularScore(91);
+
+        report.setImmuneScore(88);
+
+        report.setMetabolicScore(86);
+
+        report.setRespiratoryScore(93);
+
+        report.setEndocrineScore(87);
+
+        report.setNervousSystemScore(89);
+
+        report.setDiseaseRisks(
+                "Low cardiovascular risk"
+        );
+
+        report.setSuggestions(
+                "Maintain exercise and balanced nutrition"
+        );
         return report;
     }
 }

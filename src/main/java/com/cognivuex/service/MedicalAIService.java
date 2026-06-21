@@ -40,16 +40,39 @@ public class MedicalAIService {
                 Return ONLY valid JSON in this exact format, with no additional text or markdown:
 
                 {
-                  "patientName":"",
-                  "age":0,
-                  "glucose":0,
-                  "cholesterol":0,
-                  "bmi":0.0,
-                  "heartRate":0,
-                  "hba1c":0.0,
-                  "systolicBP":0,
-                  "diastolicBP":0
-                }
+                   "patientName":"",
+                   "age":0,
+                   "glucose":0,
+                   "cholesterol":0,
+                   "bmi":0.0,
+                   "heartRate":0,
+                   "hba1c":0.0,
+                   "systolicBP":0,
+                   "diastolicBP":0,
+                
+                   "biologicalAge":0,
+                   "healthSpanPrediction":0,
+                   "twinAccuracy":0,
+                   "longevityIndex":0,
+                
+                   "cardiovascularScore":0,
+                   "immuneScore":0,
+                   "metabolicScore":0,
+                   "respiratoryScore":0,
+                   "endocrineScore":0,
+                   "nervousSystemScore":0,
+                
+                   "riskScore":0,
+                   "wellnessScore":0,
+                
+                   "sleepScore":0,
+                   "heartScore":0,
+                   "stressScore":0,
+                   "recoveryScore":0,
+                
+                   "diseaseRisks":"",
+                   "suggestions":""
+                 }
 
                 If a value is not found in the report, use 0 or empty string.
 

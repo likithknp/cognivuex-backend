@@ -125,4 +125,22 @@ public class HealthReport {
     public void onUpdate() {
         updatedAt = LocalDateTime.now();
     }
+
+    // DIGITAL TWIN METRICS
+
+    private Integer twinAccuracy;
+
+    private Integer healthSpanPrediction;
+
+    private Integer cardiovascularScore;
+
+    private Integer immuneScore;
+
+    private Integer metabolicScore;
+
+    private Integer respiratoryScore;
+
+    private Integer endocrineScore;
+
+    private Integer nervousSystemScore;
 }

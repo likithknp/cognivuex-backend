@@ -27,10 +27,11 @@ public class ReportController {
     }
 
     @PostMapping
-    public HealthReport saveReport(
-            @RequestBody HealthReport report
-    ) {
+    public HealthReport saveReport(@RequestBody HealthReport report) {
 
+        System.out.println("BIO AGE = " + report.getBiologicalAge());
+        System.out.println("TWIN ACCURACY = " + report.getTwinAccuracy());
+        System.out.println("HEALTH SPAN = " + report.getHealthSpanPrediction());
         return repository.save(report);
     }
 
