@@ -42,36 +42,94 @@ public class FileAnalysisService {
         String extractedText = "";
 
         try {
-            document = PDDocument.load(file.getBytes());
-            PDFTextStripper stripper = new PDFTextStripper();
-            extractedText = stripper.getText(document);
-        }
-        catch (Exception e) {
-            // Could be a corrupted PDF or unsupported format
-            log.error("Failed to parse uploaded file as PDF, falling back to mock report", e);
+            // 1) Try PDF text extraction (text PDFs)
+            try {
+                document = PDDocument.load(file.getBytes());
+                PDFTextStripper stripper = new PDFTextStripper();
+                extractedText = stripper.getText(document);
+            } catch (Exception pdfEx) {
+                log.debug("PDFText extraction failed or not a PDF: {}", pdfEx.getMessage());
+                extractedText = "";
+            }
 
-            // create and save mock report so upload still succeeds
+            // 2) If no text found and file looks like DOCX, try Apache POI
+            if ((extractedText == null || extractedText.trim().length() < 20) && file.getOriginalFilename() != null && file.getOriginalFilename().toLowerCase().endsWith(".docx")) {
+                try (java.io.InputStream is = new java.io.ByteArrayInputStream(file.getBytes())) {
+                    org.apache.poi.xwpf.usermodel.XWPFDocument doc = new org.apache.poi.xwpf.usermodel.XWPFDocument(is);
+                    org.apache.poi.xwpf.extractor.XWPFWordExtractor extractor = new org.apache.poi.xwpf.extractor.XWPFWordExtractor(doc);
+                    extractedText = extractor.getText();
+                    extractor.close();
+                } catch (Exception poiEx) {
+                    log.debug("DOCX extraction failed: {}", poiEx.getMessage());
+                }
+            }
+
+            // 3) If still no text, try OCR using Tess4J (supports images and scanned PDFs by rendering pages)
+            if (extractedText == null || extractedText.trim().length() < 20) {
+                try {
+                    net.sourceforge.tess4j.Tesseract tesseract = new net.sourceforge.tess4j.Tesseract();
+                    // If TESSDATA_PREFIX or tessdata not configured, tesseract will use system defaults
+                    // Optionally set language: tesseract.setLanguage("eng");
+
+                    StringBuilder ocrBuilder = new StringBuilder();
+                    String lower = file.getOriginalFilename() == null ? "" : file.getOriginalFilename().toLowerCase();
+
+                    // If PDF, render each page to image and OCR
+                    if (lower.endsWith(".pdf")) {
+                        if (document == null) {
+                            // try to load PDF again for rendering
+                            try { document = PDDocument.load(file.getBytes()); } catch (Exception ignore) {}
+                        }
+                        if (document != null) {
+                            org.apache.pdfbox.rendering.PDFRenderer renderer = new org.apache.pdfbox.rendering.PDFRenderer(document);
+                            int pages = document.getNumberOfPages();
+                            for (int i = 0; i < pages; i++) {
+                                java.awt.image.BufferedImage image = renderer.renderImageWithDPI(i, 200);
+                                String pageText = tesseract.doOCR(image);
+                                if (pageText != null && !pageText.isBlank()) {
+                                    ocrBuilder.append(pageText).append("\n\n");
+                                }
+                            }
+                        }
+                    } else {
+                        // Try reading as image
+                        try (java.io.InputStream is = new java.io.ByteArrayInputStream(file.getBytes())) {
+                            java.awt.image.BufferedImage img = javax.imageio.ImageIO.read(is);
+                            if (img != null) {
+                                String imgText = tesseract.doOCR(img);
+                                if (imgText != null && !imgText.isBlank()) ocrBuilder.append(imgText);
+                            }
+                        }
+                    }
+
+                    String ocrText = ocrBuilder.toString().trim();
+                    if (ocrText.length() >= 20) extractedText = ocrText;
+                } catch (Exception ocrEx) {
+                    log.debug("OCR failed or tess4j not configured: {}", ocrEx.getMessage());
+                }
+            }
+
+        } finally {
+            if (document != null) {
+                try { document.close(); } catch (Exception ignore) {}
+            }
+        }
+
+        // If we've still got no meaningful text, fallback to mock report (ensures upload succeeds)
+        if (extractedText == null || extractedText.trim().length() < 20) {
+            log.error("No extracted text from file; falling back to mock report for file={}", file.getOriginalFilename());
             HealthReport mockReport = createMockReport(file, "");
             repository.save(mockReport);
             PredictionResponseDTO mockDto = predictionService.analyze(mockReport);
-            // map prediction back into report so dashboard shows values
             if (mockDto.getRiskScore() != null) mockReport.setRiskScore(mockDto.getRiskScore());
             if (mockDto.getRiskLevel() != null && !mockDto.getRiskLevel().isBlank()) {
-                try {
-                    mockReport.setRiskLevel(com.cognivuex.entity.RiskLevel.valueOf(mockDto.getRiskLevel()));
-                } catch (IllegalArgumentException ignored) {}
+                try { mockReport.setRiskLevel(com.cognivuex.entity.RiskLevel.valueOf(mockDto.getRiskLevel())); } catch (IllegalArgumentException ignored) {}
             }
             if (mockDto.getAiRecommendation() != null) mockReport.setSuggestions(mockDto.getAiRecommendation());
-            // simple wellness score derivation
             if (mockDto.getRiskScore() != null) mockReport.setWellnessScore(Math.max(0, 100 - mockDto.getRiskScore()));
             repository.save(mockReport);
             mockDto.setReportId(mockReport.getId());
             return new UploadResponseDTO(mockReport, mockDto);
-        }
-        finally {
-            if (document != null) {
-                try { document.close(); } catch (Exception ignore) {}
-            }
         }
 
         String geminiResponse;
