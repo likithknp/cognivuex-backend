@@ -139,5 +139,17 @@ app.post('/api/copilot', upload.array('files'), async (req, res) => {
   return res.json({ answer: finalAnswer, score: finalScore, findings: finalFindings, extractedText: combinedText });
 });
 
+// return latest saved report
+app.get('/api/reports/latest', (req, res) => {
+  try {
+    const reports = JSON.parse(fs.readFileSync(REPORTS_FILE, 'utf8') || '[]');
+    const last = reports.length ? reports[reports.length - 1] : null;
+    return res.json({ latest: last });
+  } catch (e) {
+    console.error('reports read error', e.message);
+    return res.status(500).json({ error: 'could not read reports' });
+  }
+});
+
 const port = process.env.PORT || process.env.PORT || 4000;
 app.listen(port, () => console.log(`Copilot analysis server listening on http://localhost:${port}`));
