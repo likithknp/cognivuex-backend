@@ -125,148 +125,214 @@ async function callOpenAI(prompt, apiKey) {
 }
 
 app.post('/api/copilot', upload.array('files'), async (req, res) => {
-  const question = req.body.question || '';
-  const patientId = req.body.patientId || null;
-  const reportId = req.body.reportId || null; // optional: analyze an existing saved report
-  let files = req.files || [];
+  try {
+    const question = req.body.question || '';
+    const patientId = req.body.patientId || null;
+    const reportId = req.body.reportId || null; // optional: analyze an existing saved report
+    let files = req.files || [];
 
-  const findings = [];
-  let score = 80;
-  let combinedText = question.toLowerCase();
-  const savedReports = [];
+    const findings = [];
+    let score = 80;
+    let combinedText = question.toLowerCase();
+    const savedReports = [];
 
-  // If reportId provided, load saved report files and include their text
-  if (reportId) {
+    // If reportId provided, load saved report files and include their text
+    if (reportId) {
+      try {
+        const reports = JSON.parse(fs.readFileSync(REPORTS_FILE, 'utf8') || '[]');
+        const record = reports.find(r => String(r.id) === String(reportId));
+        if (record && Array.isArray(record.files)) {
+          for (const f of record.files) {
+            try {
+              const buf = fs.readFileSync(f.path);
+              // create a pseudo-file object similar shape to multer file
+              const pseudo = { originalname: f.originalName, buffer: buf, size: buf.length, mimetype: f.mimetype };
+              files.push(pseudo);
+            } catch (e) { console.warn('Could not read saved file for reportId', reportId, e.message); }
+          }
+        }
+      } catch (e) { console.error('loading reportId error', e.message); }
+    }
+
+    for (const file of files) {
+      try {
+        // If file came from upload (has buffer and originalname) and is not already saved, save it
+        let outPath = null;
+        if (file.buffer && !file._saved) {
+          const safeName = `${Date.now()}_${file.originalname.replace(/[^a-z0-9_.-]/gi, '_')}`;
+          outPath = path.join(UPLOAD_DIR, safeName);
+          fs.writeFileSync(outPath, file.buffer);
+          savedReports.push({ originalName: file.originalname, path: outPath, size: file.size, mimetype: file.mimetype });
+        } else if (file.path) {
+          outPath = file.path;
+          savedReports.push({ originalName: file.originalname || path.basename(outPath), path: outPath, size: file.size || fs.statSync(outPath).size, mimetype: file.mimetype || '' });
+        }
+
+        const text = await extractTextFromFile(file);
+        combinedText += '\n' + text;
+
+        // DEBUG: log filename and extracted snippet
+        console.log('Received file:', file.originalname, 'size:', file.size, 'mimetype:', file.mimetype);
+        console.log('Extracted text (first 400 chars):', (text || '').slice(0, 400).replace(/\n/g, ' '));
+
+        const name = (file.originalname || '').toLowerCase();
+
+        // richer numeric parsing and heuristics
+        function analyzeMetrics(text) {
+          const localFindings = [];
+          let delta = 0;
+
+          // Total cholesterol
+          const totalChol = (text.match(/(?:total\s+)?cholesterol[:\s]*([0-9]{2,3})/) || [])[1];
+          if (totalChol) {
+            const val = parseInt(totalChol, 10);
+            localFindings.push(`Total cholesterol ${val} mg/dL`);
+            if (val > 240) delta -= 22;
+            else if (val > 200) delta -= 12;
+          }
+
+          // LDL
+          const ldl = (text.match(/ldl[:\s]*([0-9]{2,3})/) || [])[1];
+          if (ldl) {
+            const v = parseInt(ldl, 10);
+            localFindings.push(`LDL ${v} mg/dL`);
+            if (v > 160) delta -= 18;
+            else if (v > 130) delta -= 10;
+          }
+
+          // HDL
+          const hdl = (text.match(/hdl[:\s]*([0-9]{2,3})/) || [])[1];
+          if (hdl) {
+            const v = parseInt(hdl, 10);
+            localFindings.push(`HDL ${v} mg/dL`);
+            if (v < 40) delta -= 8;
+          }
+
+          // Triglycerides
+          const tg = (text.match(/triglycerides[:\s]*([0-9]{2,4})/) || [])[1];
+          if (tg) {
+            const v = parseInt(tg, 10);
+            localFindings.push(`Triglycerides ${v} mg/dL`);
+            if (v > 500) delta -= 18;
+            else if (v > 200) delta -= 10;
+            else if (v > 150) delta -= 6;
+          }
+
+          // HbA1c
+          const hba1c = (text.match(/hba1c[:\s]*([0-9]{1,2}\.?[0-9]?)/) || [])[1] || (text.match(/a1c[:\s]*([0-9]{1,2}\.?[0-9]?)/) || [])[1];
+          if (hba1c) {
+            const v = parseFloat(hba1c);
+            localFindings.push(`HbA1c ${v}%`);
+            if (v >= 6.5) delta -= 20;
+            else if (v >= 5.7) delta -= 10;
+          }
+
+          // Glucose (fasting)
+          const glucose = (text.match(/(?:fasting\s+)?glucose[:\s]*([0-9]{2,3})/) || [])[1];
+          if (glucose) {
+            const v = parseInt(glucose, 10);
+            localFindings.push(`Glucose ${v} mg/dL`);
+            if (v >= 126) delta -= 20;
+            else if (v >= 100) delta -= 8;
+          }
+
+          // Blood pressure
+          const bpMatch = text.match(/(\d{2,3})\/(\d{2,3})/);
+          if (bpMatch) {
+            const sys = parseInt(bpMatch[1], 10);
+            const dia = parseInt(bpMatch[2], 10);
+            localFindings.push(`BP ${sys}/${dia} mmHg`);
+            if (sys >= 180 || dia >= 120) delta -= 30;
+            else if (sys >= 140 || dia >= 90) delta -= 12;
+          }
+
+          // generic keywords
+          if (text.match(/hypertension/)) { localFindings.push('Hypertension'); delta -= 10; }
+          if (text.match(/high cholesterol|hyperlipidemia/)) { localFindings.push('High cholesterol note'); delta -= 10; }
+
+          return { localFindings, delta };
+        }
+
+        const analysis = analyzeMetrics(text);
+        if (analysis.localFindings.length) {
+          findings.push(...analysis.localFindings);
+        }
+        // apply delta
+        score += analysis.delta || 0;
+
+        // fallback keyword checks for older behavior
+        if (name.includes('cholesterol') || text.includes('cholesterol')) { /* handled above */ }
+        if (text.match(/blood pressure|bp|hypertension|systolic/)) { /* handled above */ }
+        if (text.match(/glucose|hba1c|sugar/)) { /* handled above */ }
+
+
+      } catch (e) { console.error('file processing error', e.message); }
+    }
+
+    const q = (question || '').toLowerCase();
+    if (q.includes('sleep')) { findings.push('Sleep pattern requested'); }
+    if (q.includes('diet') || q.includes('nutrition')) { findings.push('Nutrition requested'); }
+
+    score = clamp(score, 5, 99);
+
+    let finalFindings = findings.slice();
+    let finalScore = score;
+
+    function generateHeuristicAnswer(questionText, combinedText, findingsList, scoreVal) {
+      let summary = `Summary of analysis based on ${files.length} uploaded file(s):`;
+      if (findingsList.length) {
+        summary += ' ' + findingsList.join('; ') + '.';
+      } else {
+        summary += ' No critical flags detected in the parsed report text.';
+      }
+
+      let advice = '\n\nRecommendations:\n';
+      if (findingsList.some(f => /cholesterol/i.test(f))) {
+        advice += '- High cholesterol detected. Recommend dietary changes (reduce saturated fat), consider statin evaluation, and recheck lipid panel in 3 months.\n';
+      }
+      if (findingsList.some(f => /bp|blood pressure|hypertension/i.test(f))) {
+        advice += '- Blood pressure appears elevated. Measure home BP daily, reduce sodium, increase aerobic activity, and consult physician for medication review.\n';
+      }
+      if (findingsList.some(f => /glucose|hba1c|sugar/i.test(f))) {
+        advice += '- Elevated glucose levels noted. Review fasting glucose/HbA1c; advise dietary carbohydrate control, weight management, and consider endocrine consult.\n';
+      }
+      if (!advice.trim()) advice += '- Maintain healthy diet, regular activity, and follow up with your clinician for personalized care.\n';
+
+      const heuristic = `${summary}\nEstimated health score (heuristic): ${scoreVal}%${advice}`;
+      if (questionText) return `${heuristic}\n\nUser question: ${questionText}`;
+      return heuristic;
+    }
+
+    let finalAnswer = generateHeuristicAnswer(question, combinedText, finalFindings, finalScore);
+
+    const OPENAI_KEY = process.env.OPENAI_API_KEY || null;
+    if (OPENAI_KEY) {
+      const prompt = `Question: ${question}\n\nContext (extracted from uploaded reports):\n${combinedText}\n\nReturn a JSON object with keys: answer (string), score (int 0-100), findings (array of short strings).`;
+      const aiResult = await callOpenAI(prompt, OPENAI_KEY);
+      if (aiResult) {
+        if (typeof aiResult.score === 'number') finalScore = clamp(aiResult.score, 0, 100);
+        if (Array.isArray(aiResult.findings) && aiResult.findings.length) finalFindings = aiResult.findings;
+        if (aiResult.answer) finalAnswer = aiResult.answer;
+      } else {
+        // keep heuristic answer if AI failed
+        finalAnswer = generateHeuristicAnswer(question, combinedText, finalFindings, finalScore);
+      }
+    }
+
     try {
       const reports = JSON.parse(fs.readFileSync(REPORTS_FILE, 'utf8') || '[]');
-      const record = reports.find(r => String(r.id) === String(reportId));
-      if (record && Array.isArray(record.files)) {
-        for (const f of record.files) {
-          try {
-            const buf = fs.readFileSync(f.path);
-            // create a pseudo-file object similar shape to multer file
-            const pseudo = { originalname: f.originalName, buffer: buf, size: buf.length, mimetype: f.mimetype };
-            files.push(pseudo);
-          } catch (e) { console.warn('Could not read saved file for reportId', reportId, e.message); }
-        }
-      }
-    } catch (e) { console.error('loading reportId error', e.message); }
+      const record = { id: Date.now(), patientId, question, timestamp: new Date().toISOString(), files: savedReports, score: finalScore, findings: finalFindings };
+      reports.push(record);
+      fs.writeFileSync(REPORTS_FILE, JSON.stringify(reports, null, 2));
+    } catch (e) { console.error('reports persistence error', e.message); }
+
+    return res.json({ answer: finalAnswer, score: finalScore, findings: finalFindings, extractedText: combinedText });
+  } catch (e) {
+    console.error('copilot handler error', e);
+    // ensure we always send valid JSON error
+    try { return res.status(500).json({ error: 'internal_server_error', message: e?.message || String(e) }); } catch (err) { console.error('failed to send error response', err); return res.status(500).send('internal error'); }
   }
-
-  for (const file of files) {
-    try {
-      // If file came from upload (has buffer and originalname) and is not already saved, save it
-      let outPath = null;
-      if (file.buffer && !file._saved) {
-        const safeName = `${Date.now()}_${file.originalname.replace(/[^a-z0-9_.-]/gi, '_')}`;
-        outPath = path.join(UPLOAD_DIR, safeName);
-        fs.writeFileSync(outPath, file.buffer);
-        savedReports.push({ originalName: file.originalname, path: outPath, size: file.size, mimetype: file.mimetype });
-      } else if (file.path) {
-        outPath = file.path;
-        savedReports.push({ originalName: file.originalname || path.basename(outPath), path: outPath, size: file.size || fs.statSync(outPath).size, mimetype: file.mimetype || '' });
-      }
-
-      const text = await extractTextFromFile(file);
-      combinedText += '\n' + text;
-
-      // DEBUG: log filename and extracted snippet
-      console.log('Received file:', file.originalname, 'size:', file.size, 'mimetype:', file.mimetype);
-      console.log('Extracted text (first 400 chars):', (text || '').slice(0, 400).replace(/\n/g, ' '));
-
-      const name = (file.originalname || '').toLowerCase();
-
-      // richer numeric parsing and heuristics
-      function analyzeMetrics(text) {
-        const localFindings = [];
-        let delta = 0;
-
-        // Total cholesterol
-        const totalChol = (text.match(/(?:total\s+)?cholesterol[:\s]*([0-9]{2,3})/) || [])[1];
-        if (totalChol) {
-          const val = parseInt(totalChol, 10);
-          localFindings.push(`Total cholesterol ${val} mg/dL`);
-          if (val > 240) delta -= 22;
-          else if (val > 200) delta -= 12;
-        }
-
-        // LDL
-        const ldl = (text.match(/ldl[:\s]*([0-9]{2,3})/) || [])[1];
-        if (ldl) {
-          const v = parseInt(ldl, 10);
-          localFindings.push(`LDL ${v} mg/dL`);
-          if (v > 160) delta -= 18;
-          else if (v > 130) delta -= 10;
-        }
-
-        // HDL
-        const hdl = (text.match(/hdl[:\s]*([0-9]{2,3})/) || [])[1];
-        if (hdl) {
-          const v = parseInt(hdl, 10);
-          localFindings.push(`HDL ${v} mg/dL`);
-          if (v < 40) delta -= 8;
-        }
-
-        // Triglycerides
-        const tg = (text.match(/triglycerides[:\s]*([0-9]{2,4})/) || [])[1];
-        if (tg) {
-          const v = parseInt(tg, 10);
-          localFindings.push(`Triglycerides ${v} mg/dL`);
-          if (v > 500) delta -= 18;
-          else if (v > 200) delta -= 10;
-          else if (v > 150) delta -= 6;
-        }
-
-        // HbA1c
-        const hba1c = (text.match(/hba1c[:\s]*([0-9]{1,2}\.?[0-9]?)/) || [])[1] || (text.match(/a1c[:\s]*([0-9]{1,2}\.?[0-9]?)/) || [])[1];
-        if (hba1c) {
-          const v = parseFloat(hba1c);
-          localFindings.push(`HbA1c ${v}%`);
-          if (v >= 6.5) delta -= 20;
-          else if (v >= 5.7) delta -= 10;
-        }
-
-        // Glucose (fasting)
-        const glucose = (text.match(/(?:fasting\s+)?glucose[:\s]*([0-9]{2,3})/) || [])[1];
-        if (glucose) {
-          const v = parseInt(glucose, 10);
-          localFindings.push(`Glucose ${v} mg/dL`);
-          if (v >= 126) delta -= 20;
-          else if (v >= 100) delta -= 8;
-        }
-
-        // Blood pressure
-        const bpMatch = text.match(/(\d{2,3})\/(\d{2,3})/);
-        if (bpMatch) {
-          const sys = parseInt(bpMatch[1], 10);
-          const dia = parseInt(bpMatch[2], 10);
-          localFindings.push(`BP ${sys}/${dia} mmHg`);
-          if (sys >= 180 || dia >= 120) delta -= 30;
-          else if (sys >= 140 || dia >= 90) delta -= 12;
-        }
-
-        // generic keywords
-        if (text.match(/hypertension/)) { localFindings.push('Hypertension'); delta -= 10; }
-        if (text.match(/high cholesterol|hyperlipidemia/)) { localFindings.push('High cholesterol note'); delta -= 10; }
-
-        return { localFindings, delta };
-      }
-
-      const analysis = analyzeMetrics(text);
-      if (analysis.localFindings.length) {
-        findings.push(...analysis.localFindings);
-      }
-      // apply delta
-      score += analysis.delta || 0;
-
-      // fallback keyword checks for older behavior
-      if (name.includes('cholesterol') || text.includes('cholesterol')) { /* handled above */ }
-      if (text.match(/blood pressure|bp|hypertension|systolic/)) { /* handled above */ }
-      if (text.match(/glucose|hba1c|sugar/)) { /* handled above */ }
-
-
-    } catch (e) { console.error('file processing error', e.message); }
-  }
+});
   function generateHeuristicAnswer(questionText, combinedText, findingsList, scoreVal) {
     let summary = `Summary of analysis based on ${files.length} uploaded file(s):`;
     if (findingsList.length) {
@@ -354,6 +420,12 @@ app.get('/api/reports/:id', (req, res) => {
     console.error('reports read error', e.message);
     return res.status(500).json({ error: 'could not read reports' });
   }
+});
+
+// global error handler
+app.use((err, req, res, next) => {
+  console.error('unhandled error', err);
+  try { res.status(500).json({ error: 'unhandled_error', message: err?.message || String(err) }); } catch (e) { res.status(500).send('unhandled_error'); }
 });
 
 const port = process.env.PORT || process.env.PORT || 4000;
