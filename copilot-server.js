@@ -90,6 +90,10 @@ app.post('/api/copilot', upload.array('files'), async (req, res) => {
       const text = await extractTextFromFile(file);
       combinedText += '\n' + text;
 
+      // DEBUG: log filename and extracted snippet
+      console.log('Received file:', file.originalname, 'size:', file.size, 'mimetype:', file.mimetype);
+      console.log('Extracted text (first 400 chars):', (text || '').slice(0, 400).replace(/\n/g, ' '));
+
       const name = (file.originalname || '').toLowerCase();
       if (name.includes('cholesterol') || text.includes('cholesterol')) { findings.push('High cholesterol'); score -= 15; }
       if (text.match(/blood pressure|bp|hypertension|systolic/)) { findings.push('Blood pressure concerns'); score -= 12; }
@@ -132,7 +136,7 @@ app.post('/api/copilot', upload.array('files'), async (req, res) => {
     fs.writeFileSync(REPORTS_FILE, JSON.stringify(reports, null, 2));
   } catch (e) { console.error('reports persistence error', e.message); }
 
-  return res.json({ answer: finalAnswer, score: finalScore, findings: finalFindings });
+  return res.json({ answer: finalAnswer, score: finalScore, findings: finalFindings, extractedText: combinedText });
 });
 
 const port = process.env.PORT || process.env.PORT || 4000;
