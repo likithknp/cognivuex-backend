@@ -5,10 +5,12 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 
-let pdfParse, mammoth, fetch;
+let pdfParse, mammoth, fetch, tesseract, sharp;
 try { pdfParse = require('pdf-parse'); } catch (e) { console.warn('pdf-parse not installed, PDF parsing disabled'); }
 try { mammoth = require('mammoth'); } catch (e) { console.warn('mammoth not installed, DOCX parsing disabled'); }
 try { fetch = require('node-fetch'); } catch (e) { fetch = global.fetch; }
+try { tesseract = require('tesseract.js'); } catch (e) { console.warn('tesseract.js not installed, OCR disabled'); }
+try { sharp = require('sharp'); } catch (e) { console.warn('sharp not installed, PDF->image conversion disabled'); }
 
 const upload = multer({ storage: multer.memoryStorage() });
 const app = express();
@@ -25,12 +27,64 @@ async function extractTextFromFile(file) {
   const name = (file.originalname || '').toLowerCase();
   const textFromBuffer = file.buffer ? file.buffer.toString('utf8') : '';
 
+  // First try PDF text extraction
   if (name.endsWith('.pdf') && pdfParse) {
-    try { const data = await pdfParse(file.buffer); return (data.text || textFromBuffer).toLowerCase(); } catch (e) { return textFromBuffer.toLowerCase(); }
+    try {
+      const data = await pdfParse(file.buffer);
+      if (data && data.text && data.text.trim().length > 0) return (data.text || textFromBuffer).toLowerCase();
+    } catch (e) {
+      console.warn('pdf-parse error', e.message);
+    }
   }
 
+  // DOCX extraction
   if ((name.endsWith('.docx') || name.endsWith('.doc')) && mammoth) {
-    try { const result = await mammoth.extractRawText({ buffer: file.buffer }); return (result.value || textFromBuffer).toLowerCase(); } catch (e) { return textFromBuffer.toLowerCase(); }
+    try {
+      const result = await mammoth.extractRawText({ buffer: file.buffer });
+      if (result && result.value && result.value.trim().length > 0) return (result.value || textFromBuffer).toLowerCase();
+    } catch (e) {
+      console.warn('mammoth error', e.message);
+    }
+  }
+
+  // If it's an image and OCR is available, attempt OCR
+  if (tesseract && (file.mimetype && file.mimetype.startsWith('image/') || name.match(/\.(png|jpe?g|tif|tiff)$/))) {
+    try {
+      const { data: { text } } = await tesseract.recognize(file.buffer, 'eng');
+      if (text && text.trim().length > 0) return text.toLowerCase();
+    } catch (e) {
+      console.error('tesseract image OCR error', e.message);
+    }
+  }
+
+  // For PDFs, try converting to image(s) with sharp first (better quality) then OCR each page
+  if (name.endsWith('.pdf')) {
+    if (sharp) {
+      try {
+        // Convert first page of PDF to PNG at higher density for better OCR
+        const imgBuffer = await sharp(file.buffer, { density: 300 }).png().toBuffer();
+        if (tesseract) {
+          try {
+            const { data: { text } } = await tesseract.recognize(imgBuffer, 'eng');
+            if (text && text.trim().length > 0) return text.toLowerCase();
+          } catch (e) {
+            console.error('tesseract OCR on sharp image failed', e.message);
+          }
+        }
+      } catch (e) {
+        console.warn('sharp PDF->image conversion failed:', e.message);
+      }
+    }
+
+    // If sharp not available or conversion didn't yield text, fall back to direct PDF OCR with tesseract
+    if (tesseract) {
+      try {
+        const { data: { text } } = await tesseract.recognize(file.buffer, 'eng');
+        if (text && text.trim().length > 0) return text.toLowerCase();
+      } catch (e) {
+        console.error('tesseract pdf OCR error', e.message);
+      }
+    }
   }
 
   return textFromBuffer.toLowerCase();
@@ -73,19 +127,45 @@ async function callOpenAI(prompt, apiKey) {
 app.post('/api/copilot', upload.array('files'), async (req, res) => {
   const question = req.body.question || '';
   const patientId = req.body.patientId || null;
-  const files = req.files || [];
+  const reportId = req.body.reportId || null; // optional: analyze an existing saved report
+  let files = req.files || [];
 
   const findings = [];
   let score = 80;
   let combinedText = question.toLowerCase();
   const savedReports = [];
 
+  // If reportId provided, load saved report files and include their text
+  if (reportId) {
+    try {
+      const reports = JSON.parse(fs.readFileSync(REPORTS_FILE, 'utf8') || '[]');
+      const record = reports.find(r => String(r.id) === String(reportId));
+      if (record && Array.isArray(record.files)) {
+        for (const f of record.files) {
+          try {
+            const buf = fs.readFileSync(f.path);
+            // create a pseudo-file object similar shape to multer file
+            const pseudo = { originalname: f.originalName, buffer: buf, size: buf.length, mimetype: f.mimetype };
+            files.push(pseudo);
+          } catch (e) { console.warn('Could not read saved file for reportId', reportId, e.message); }
+        }
+      }
+    } catch (e) { console.error('loading reportId error', e.message); }
+  }
+
   for (const file of files) {
     try {
-      const safeName = `${Date.now()}_${file.originalname.replace(/[^a-z0-9_.-]/gi, '_')}`;
-      const outPath = path.join(UPLOAD_DIR, safeName);
-      fs.writeFileSync(outPath, file.buffer);
-      savedReports.push({ originalName: file.originalname, path: outPath, size: file.size, mimetype: file.mimetype });
+      // If file came from upload (has buffer and originalname) and is not already saved, save it
+      let outPath = null;
+      if (file.buffer && !file._saved) {
+        const safeName = `${Date.now()}_${file.originalname.replace(/[^a-z0-9_.-]/gi, '_')}`;
+        outPath = path.join(UPLOAD_DIR, safeName);
+        fs.writeFileSync(outPath, file.buffer);
+        savedReports.push({ originalName: file.originalname, path: outPath, size: file.size, mimetype: file.mimetype });
+      } else if (file.path) {
+        outPath = file.path;
+        savedReports.push({ originalName: file.originalname || path.basename(outPath), path: outPath, size: file.size || fs.statSync(outPath).size, mimetype: file.mimetype || '' });
+      }
 
       const text = await extractTextFromFile(file);
       combinedText += '\n' + text;
@@ -187,16 +267,6 @@ app.post('/api/copilot', upload.array('files'), async (req, res) => {
 
     } catch (e) { console.error('file processing error', e.message); }
   }
-
-  const q = (question || '').toLowerCase();
-  if (q.includes('sleep')) { findings.push('Sleep pattern requested'); }
-  if (q.includes('diet') || q.includes('nutrition')) { findings.push('Nutrition requested'); }
-
-  score = clamp(score, 5, 99);
-
-  let finalFindings = findings.slice();
-  let finalScore = score;
-
   function generateHeuristicAnswer(questionText, combinedText, findingsList, scoreVal) {
     let summary = `Summary of analysis based on ${files.length} uploaded file(s):`;
     if (findingsList.length) {
@@ -248,12 +318,38 @@ app.post('/api/copilot', upload.array('files'), async (req, res) => {
   return res.json({ answer: finalAnswer, score: finalScore, findings: finalFindings, extractedText: combinedText });
 });
 
+// list all reports
+app.get('/api/reports', (req, res) => {
+  try {
+    const reports = JSON.parse(fs.readFileSync(REPORTS_FILE, 'utf8') || '[]');
+    // return metadata only
+    const meta = reports.map(r => ({ id: r.id, patientId: r.patientId, timestamp: r.timestamp, score: r.score, findings: r.findings, files: r.files.map(f => f.originalName) }));
+    return res.json({ reports: meta });
+  } catch (e) {
+    console.error('reports read error', e.message);
+    return res.status(500).json({ error: 'could not read reports' });
+  }
+});
+
 // return latest saved report
 app.get('/api/reports/latest', (req, res) => {
   try {
     const reports = JSON.parse(fs.readFileSync(REPORTS_FILE, 'utf8') || '[]');
     const last = reports.length ? reports[reports.length - 1] : null;
     return res.json({ latest: last });
+  } catch (e) {
+    console.error('reports read error', e.message);
+    return res.status(500).json({ error: 'could not read reports' });
+  }
+});
+
+// get a single report
+app.get('/api/reports/:id', (req, res) => {
+  try {
+    const reports = JSON.parse(fs.readFileSync(REPORTS_FILE, 'utf8') || '[]');
+    const record = reports.find(r => String(r.id) === String(req.params.id));
+    if (!record) return res.status(404).json({ error: 'not found' });
+    return res.json({ report: record });
   } catch (e) {
     console.error('reports read error', e.message);
     return res.status(500).json({ error: 'could not read reports' });
