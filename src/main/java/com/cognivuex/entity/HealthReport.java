@@ -65,7 +65,7 @@ public class HealthReport {
     // AI PREDICTION
     // =========================
 
-    private Integer riskScore;
+    public Integer riskScore;
 
     @Enumerated(EnumType.STRING)
     private RiskLevel riskLevel;
@@ -93,17 +93,17 @@ public class HealthReport {
     // =========================
 
     @Column(length = 5000)
-    private String diseaseRisks;
+    public String diseaseRisks;
 
     @Column(length = 5000)
-    private String suggestions;
+    public String suggestions;
 
     // =========================
     // REPORT DATA
     // =========================
 
     @Column(length = 20000)
-    private String extractedText;
+    public String extractedText;
 
     private String uploadedFileName;
 

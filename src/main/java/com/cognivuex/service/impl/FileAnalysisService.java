@@ -9,12 +9,20 @@ import com.cognivuex.service.PredictionService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.rendering.PDFRenderer;
 import org.apache.pdfbox.text.PDFTextStripper;
+import org.apache.poi.xwpf.extractor.XWPFWordExtractor;
+import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.web.multipart.MultipartFile;
+
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 
 @Service
 public class FileAnalysisService {
@@ -47,6 +55,7 @@ public class FileAnalysisService {
                 document = PDDocument.load(file.getBytes());
                 PDFTextStripper stripper = new PDFTextStripper();
                 extractedText = stripper.getText(document);
+                log.info("PDF text extraction succeeded, extracted {} chars", extractedText.length());
             } catch (Exception pdfEx) {
                 log.debug("PDFText extraction failed or not a PDF: {}", pdfEx.getMessage());
                 extractedText = "";
@@ -54,58 +63,14 @@ public class FileAnalysisService {
 
             // 2) If no text found and file looks like DOCX, try Apache POI
             if ((extractedText == null || extractedText.trim().length() < 20) && file.getOriginalFilename() != null && file.getOriginalFilename().toLowerCase().endsWith(".docx")) {
-                try (java.io.InputStream is = new java.io.ByteArrayInputStream(file.getBytes())) {
-                    org.apache.poi.xwpf.usermodel.XWPFDocument doc = new org.apache.poi.xwpf.usermodel.XWPFDocument(is);
-                    org.apache.poi.xwpf.extractor.XWPFWordExtractor extractor = new org.apache.poi.xwpf.extractor.XWPFWordExtractor(doc);
+                try (InputStream is = new ByteArrayInputStream(file.getBytes())) {
+                    XWPFDocument doc = new XWPFDocument(is);
+                    XWPFWordExtractor extractor = new XWPFWordExtractor(doc);
                     extractedText = extractor.getText();
                     extractor.close();
+                    log.info("DOCX extraction succeeded, extracted {} chars", extractedText.length());
                 } catch (Exception poiEx) {
                     log.debug("DOCX extraction failed: {}", poiEx.getMessage());
-                }
-            }
-
-            // 3) If still no text, try OCR using Tess4J (supports images and scanned PDFs by rendering pages)
-            if (extractedText == null || extractedText.trim().length() < 20) {
-                try {
-                    net.sourceforge.tess4j.Tesseract tesseract = new net.sourceforge.tess4j.Tesseract();
-                    // If TESSDATA_PREFIX or tessdata not configured, tesseract will use system defaults
-                    // Optionally set language: tesseract.setLanguage("eng");
-
-                    StringBuilder ocrBuilder = new StringBuilder();
-                    String lower = file.getOriginalFilename() == null ? "" : file.getOriginalFilename().toLowerCase();
-
-                    // If PDF, render each page to image and OCR
-                    if (lower.endsWith(".pdf")) {
-                        if (document == null) {
-                            // try to load PDF again for rendering
-                            try { document = PDDocument.load(file.getBytes()); } catch (Exception ignore) {}
-                        }
-                        if (document != null) {
-                            org.apache.pdfbox.rendering.PDFRenderer renderer = new org.apache.pdfbox.rendering.PDFRenderer(document);
-                            int pages = document.getNumberOfPages();
-                            for (int i = 0; i < pages; i++) {
-                                java.awt.image.BufferedImage image = renderer.renderImageWithDPI(i, 200);
-                                String pageText = tesseract.doOCR(image);
-                                if (pageText != null && !pageText.isBlank()) {
-                                    ocrBuilder.append(pageText).append("\n\n");
-                                }
-                            }
-                        }
-                    } else {
-                        // Try reading as image
-                        try (java.io.InputStream is = new java.io.ByteArrayInputStream(file.getBytes())) {
-                            java.awt.image.BufferedImage img = javax.imageio.ImageIO.read(is);
-                            if (img != null) {
-                                String imgText = tesseract.doOCR(img);
-                                if (imgText != null && !imgText.isBlank()) ocrBuilder.append(imgText);
-                            }
-                        }
-                    }
-
-                    String ocrText = ocrBuilder.toString().trim();
-                    if (ocrText.length() >= 20) extractedText = ocrText;
-                } catch (Exception ocrEx) {
-                    log.debug("OCR failed or tess4j not configured: {}", ocrEx.getMessage());
                 }
             }
 
@@ -115,9 +80,9 @@ public class FileAnalysisService {
             }
         }
 
-        // If we've still got no meaningful text, fallback to mock report (ensures upload succeeds)
+        // If no meaningful text extracted, fallback to mock report (ensures upload succeeds)
         if (extractedText == null || extractedText.trim().length() < 20) {
-            log.error("No extracted text from file; falling back to mock report for file={}", file.getOriginalFilename());
+            log.warn("No extracted text from file: {}; using mock report", file.getOriginalFilename());
             HealthReport mockReport = createMockReport(file, "");
             repository.save(mockReport);
             PredictionResponseDTO mockDto = predictionService.analyze(mockReport);

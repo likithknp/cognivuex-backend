@@ -10,7 +10,7 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 public class UploadResponseDTO {
 
-    private HealthReport report;
+    public HealthReport report;
 
     private PredictionResponseDTO prediction;
 
