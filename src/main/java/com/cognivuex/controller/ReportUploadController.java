@@ -126,7 +126,7 @@ public class ReportUploadController {
     /**
      * Get all uploaded reports
      */
-    @GetMapping("/reports")
+    @GetMapping("/reports/all")
     public ResponseEntity<?> getAllReports() {
         try {
             List<HealthReport> reports = reportRepository.findAll();
