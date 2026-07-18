@@ -1,29 +1,37 @@
 package com.cognivuex.service;
 
 import com.cognivuex.dto.ConversationMessage;
-import com.openai.client.OpenAIClient;
-import com.openai.models.*;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class OpenAIService {
 
     private static final Logger log = LoggerFactory.getLogger(OpenAIService.class);
+    private static final String OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 
-    private final OpenAIClient openAIClient;
+    @Value("${openai.api.key:}")
+    private String apiKey;
 
     @Value("${openai.model:gpt-4o-mini}")
     private String model;
 
-    public OpenAIService(OpenAIClient openAIClient) {
-        this.openAIClient = openAIClient;
-    }
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final RestTemplate restTemplate = new RestTemplate();
 
     private static final String SYSTEM_PROMPT = """
 You are CognivueX AI - a professional AI Health Assistant.
@@ -65,42 +73,57 @@ IMPORTANT DISCLAIMER:
      */
     public String analyzeHealthReport(String reportText, String question, List<ConversationMessage> conversationHistory, String patientName) {
         try {
-            List<ChatCompletionMessageParam> messages = new ArrayList<>();
+            if (apiKey == null || apiKey.isEmpty()) {
+                throw new IllegalArgumentException("OpenAI API key is not configured");
+            }
+
+            // Build messages list
+            List<Map<String, String>> messages = new ArrayList<>();
 
             // Add system message
-            messages.add(ChatCompletionMessageParam.ofSystem(SYSTEM_PROMPT));
+            messages.add(Map.of("role", "system", "content", SYSTEM_PROMPT));
 
             // Add context about the report
             String reportContext = buildReportContext(reportText, patientName);
-            messages.add(ChatCompletionMessageParam.ofSystem(reportContext));
+            messages.add(Map.of("role", "system", "content", reportContext));
 
             // Add conversation history
             if (conversationHistory != null && !conversationHistory.isEmpty()) {
                 for (ConversationMessage msg : conversationHistory) {
-                    if ("user".equalsIgnoreCase(msg.getRole())) {
-                        messages.add(ChatCompletionMessageParam.ofUser(msg.getContent()));
-                    } else if ("assistant".equalsIgnoreCase(msg.getRole())) {
-                        messages.add(ChatCompletionMessageParam.ofAssistant(msg.getContent()));
-                    }
+                    messages.add(Map.of("role", msg.getRole(), "content", msg.getContent()));
                 }
             }
 
             // Add current question
-            messages.add(ChatCompletionMessageParam.ofUser(question));
+            messages.add(Map.of("role", "user", "content", question));
 
-            // Call OpenAI API
-            ChatCompletion completion = openAIClient.chat().completions().create(ChatCompletionCreateParams.builder()
-                    .model(model)
-                    .messages(messages)
-                    .temperature(0.7)
-                    .maxTokens(2000)
-                    .build());
+            // Build request
+            Map<String, Object> requestBody = new HashMap<>();
+            requestBody.put("model", model);
+            requestBody.put("messages", messages);
+            requestBody.put("temperature", 0.7);
+            requestBody.put("max_tokens", 2000);
 
-            String response = completion.choices().get(0).message().content().orElse(
-                "Unable to generate response. Please try again.");
+            // Send request
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.set("Authorization", "Bearer " + apiKey);
 
-            log.info("OpenAI API call successful");
-            return response;
+            HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
+            ResponseEntity<String> response = restTemplate.postForEntity(OPENAI_API_URL, entity, String.class);
+
+            // Parse response
+            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
+                JsonNode jsonNode = objectMapper.readTree(response.getBody());
+                String content = jsonNode.path("choices").path(0).path("message").path("content").asText();
+                
+                if (content != null && !content.isEmpty()) {
+                    log.info("OpenAI API call successful");
+                    return content;
+                }
+            }
+
+            throw new RuntimeException("Invalid response from OpenAI API");
 
         } catch (Exception e) {
             log.error("Error calling OpenAI API", e);
