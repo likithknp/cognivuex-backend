@@ -17,6 +17,7 @@
 
     <properties>
         <java.version>17</java.version>
+        <lombok.version>1.18.40</lombok.version>
     </properties>
 
     <!-- Removed Spring AI BOM: not needed and incompatible with Spring Boot 3.2.5 for this project -->
@@ -62,6 +63,7 @@
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
+            <version>${lombok.version}</version>
             <optional>true</optional>
         </dependency>
 
@@ -137,11 +139,12 @@
             <version>5.2.3</version>
         </dependency>
 
-        <!-- PDF Reading (single entry kept) -->
+
+        <!-- OpenAI Java SDK -->
         <dependency>
-            <groupId>org.apache.pdfbox</groupId>
-            <artifactId>pdfbox</artifactId>
-            <version>2.0.30</version>
+            <groupId>com.openai</groupId>
+            <artifactId>openai-java</artifactId>
+            <version>0.13.0</version>
         </dependency>
 
         <!-- Testing -->
@@ -171,6 +174,16 @@
                     <source>17</source>
                     <target>17</target>
                     <release>17</release>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                            <version>${lombok.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
+                    <annotationProcessors>
+                        <annotationProcessor>lombok.launch.AnnotationProcessorHider$AnnotationProcessor</annotationProcessor>
+                    </annotationProcessors>
                 </configuration>
 
             </plugin>
